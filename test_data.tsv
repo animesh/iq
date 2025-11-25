@@ -1,0 +1,7 @@
+PG.ProteinGroups	R.Condition	EG.ModifiedSequence	FG.Charge	F.FrgIon	F.Charge	F.PeakArea
+P1	S1	Seq1	2	y1	1	1024
+P1	S2	Seq1	2	y1	1	2048
+P1	S3	Seq1	2	y1	1	NA
+P1	S1	Seq2	2	y2	1	4096
+P1	S2	Seq2	2	y2	1	8192
+P1	S3	Seq2	2	y2	1	16384
