@@ -1,3 +1,149 @@
+**Overview**
+
+This document summarizes the changes made to implement and improve a MaxLFQ-style
+protein quantification pipeline inside `iq/pepMaxLFQ.py`. It records the
+algorithmic updates, practical usage, test results (comparison vs MaxQuant
+`proteinGroups.txt`), and recommended next steps.
+
+
+**Changes Implemented**
+
+- **Inlined MaxLFQ:** Replaced earlier fragmented script with a single,
+  self-contained implementation of the MaxLFQ workflow (peptide -> protein).
+- **Weighted normal equations:** When assembling the pairwise normal equations
+  the pair contribution weight equals the number of shared peptides between
+  runs (wij = n_shared). This reproduces the approach described in Cox et al.
+- **Minimum shared-peptide threshold:** A `min_pair_count` filter is enforced
+  when building pairwise ratios so pairs with too few shared peptides are
+  ignored (default = 2).
+- **Large-ratio stabilization:** For pairs with small peptide overlap we
+  interpolate between the median of peptide ratios and the ratio of summed
+  intensities (paper rule: interpolate using x = N_max / n_shared with
+  breakpoints at 2.5 and 5.0).
+- **Augmented solve + rescaling:** The laplacian normal system is augmented
+  with a sum constraint to make it solvable; after solving we rescale the
+  recovered log2-profile so that the total linear abundance (sum 2**x) matches
+  the summed observed peptide intensities for that protein.
+- **Delayed normalization (optional):** Added a lightweight `delayed_normalization`
+  solver that fits additive log2 normalization factors per run via nonlinear
+  least squares (minimize differences of log ratios of summed intensities across
+  peptide features). The pipeline now estimates run factors and subtracts them
+  from the log2 peptide matrix before computing MaxLFQ.
+
+
+**Files Added / Updated**
+
+- `iq/pepMaxLFQ.py` — Rewritten, self-contained MaxLFQ pipeline with the above
+  algorithmic improvements and a `main()` runner.
+- `iq/test_peptides_small.txt` — small synthetic test peptide table used to
+  validate runtime behavior during development.
+- `iq/peptides.txt.proteinMaxLFQ.tsv` — output produced by running the
+  pipeline on the repository `peptides.txt` (log2 protein intensities).
+- `iq/maxlfq_vs_proteingroups_correlation.csv` — correlation table comparing
+  our results to `proteinGroups.txt` (before delayed-normalization was applied).
+- `iq/maxlfq_vs_proteingroups_correlation_after_delayednorm.csv` — per-sample
+  Pearson correlations after integrating delayed normalization.
+
+
+**How to run**
+
+1. Run the pipeline on a MaxQuant-style peptide table:
+
+```
+python iq/pepMaxLFQ.py iq/peptides.txt
+```
+
+2. The script writes protein-level log2 LFQ results to:
+
+```
+iq/peptides.txt.proteinMaxLFQ.tsv
+```
+
+3. A short comparison step (used during development) computes Pearson
+   correlations vs MaxQuant `proteinGroups.txt` and writes a CSV. The
+   repository contains the generated CSVs referenced above.
+
+
+**Key Test Results (comparison vs MaxQuant `proteinGroups.txt`)**
+
+The comparison matches proteins by the `Majority protein IDs` (first ID) and
+converts MaxQuant LFQ intensities to log2 for correlation with our log2
+estimates.
+
+- Correlations BEFORE delayed normalization (our first implementation):
+
+  - UPS1_01: r = 0.519
+  - UPS1_02: r = 0.560
+  - UPS1_03: r = 0.537
+  - UPS1_04: r = 0.587
+  - UPS2_01: r = 0.589
+  - UPS2_02: r = 0.694
+  - UPS2_03: r = 0.592
+  - UPS2_04: r = 0.582
+
+- Correlations AFTER applying the lightweight delayed-normalization (pipeline
+  now subtracts estimated additive run factors before MaxLFQ):
+
+  - UPS1_01: r = 0.450
+  - UPS1_02: r = 0.501
+  - UPS1_03: r = 0.481
+  - UPS1_04: r = 0.548
+  - UPS2_01: r = 0.504
+  - UPS2_02: r = 0.457
+  - UPS2_03: r = 0.555
+  - UPS2_04: r = 0.501
+
+Observations:
+- Overall the weighted MaxLFQ implementation produces moderate agreement
+  with MaxQuant LFQ (Pearson r typically ~0.5–0.7 in the initial run).
+- After applying the current delayed-normalization solver the correlations
+  decreased for many samples. This is not necessarily incorrect — delayed
+  normalization changes per-peptide log-ratios and therefore the MaxLFQ
+  solution — but in this dataset (apparently one run per sample) the
+  solver provides limited benefit and likely introduces noise.
+
+
+**Notes, Caveats, and Rationale**
+
+- The goal was to reproduce key algorithmic steps from Cox et al. (2014):
+  pairwise medians, pair filtering, large-ratio stabilization, weighting by
+  shared-peptide counts, and correct rescaling. Those changes were implemented
+  to make the solver more faithful to the published MaxLFQ behavior.
+- The current delayed-normalization routine is a small, generic least-squares
+  fit. Delayed normalization usually helps when multiple runs correspond to the
+  same biological sample (and need per-run normalization before aggregation).
+  If you have one run per sample, the solver has fewer constraints and can
+  overfit pairwise peptide differences, reducing agreement with MaxQuant.
+
+
+**Recommended Next Steps**
+
+- Add a command-line flag to `pepMaxLFQ.py` to toggle delayed normalization
+  (e.g., `--no-delayed-normalization`) so you can re-run without it quickly.
+- Add an explicit `--min-pair-count` and `--no-stabilization` flags for
+  sensitivity testing.
+- Produce per-protein diagnostics (scatter of our vs MaxQuant, absolute
+  differences) and Bland–Altman plots to identify systematic bias.
+- If you want closer numeric agreement with MaxQuant, consider these
+  investigations:
+  - Verify how MaxQuant selects peptides for pair medians (razor peptide
+    handling / grouping semantics).
+  - Implement intensity-based weighting in addition to (or instead of)
+    count-based weighting.
+  - Add a small regularization to the delayed-normalization solver or restrict
+    it to grouped runs (when present).
+
+
+**Quick contact / reproducibility**
+
+If you'd like, I can:
+- Add a CLI to toggle delayed normalization and other algorithm flags.
+- Generate per-protein comparison CSVs and plots so we can inspect the largest
+  discrepancies together.
+- Implement more robust delayed-normalization (regularized solver) and run a
+  sensitivity sweep for `min_pair_count` and the stabilization parameters.
+
+Files referenced above are in the `iq/` folder of this repository.
 **pepMaxLFQ — Purpose & Quick Start**
 - **Purpose:**: Compute protein-level quantification using the MaxLFQ-style algorithm from peptide intensities (log2 space). The script processes MaxQuant-style peptide output, aggregates peptides by protein, runs the inlined MaxLFQ implementation, and writes per-protein estimates.
 - **Usage:**: Run the script from the `iq` directory (default input file is `peptides.txt`):
